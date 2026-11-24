@@ -12,12 +12,16 @@ export async function POST(
     const body = (await request.json()) as {
       action?: 'leave' | 'return';
       reason?: 'visibility_hidden' | 'window_blur' | 'fullscreen_exit';
+      answers?: Record<string, string[]>;
+      flagged_ids?: number[];
     };
 
     const action = body.action === 'return' ? 'return' : 'leave';
     const result = recordSessionViolation(id, {
       action,
       reason: body.reason,
+      answers: body.answers,
+      flagged_ids: body.flagged_ids,
     });
 
     if (!result.session) {

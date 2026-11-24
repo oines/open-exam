@@ -165,6 +165,7 @@ export async function GET(
       override_note: s.override_note,
       raw_score: s.raw_score,
       effective_score: s.effective_score,
+      answered_count: Object.keys(s.answers).length,
       correct_count: s.correct_count,
       total_questions: s.total_questions,
       passed: s.status !== 'in_progress' && computeSessionPassed(s, exam.pass_score),

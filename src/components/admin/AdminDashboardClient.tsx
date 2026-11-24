@@ -41,6 +41,7 @@ interface SessionListItem {
   override_note: string;
   raw_score: number;
   effective_score: number;
+  answered_count: number;
   correct_count: number;
   total_questions: number;
   passed: boolean;
@@ -170,6 +171,7 @@ export function AdminDashboardClient({
   const [loading, setLoading] = useState(false);
 
   const [tab, setTab] = useState<AdminTab>('overview');
+  const [liveRefresh, setLiveRefresh] = useState(true);
   const [copiedSlug, setCopiedSlug] = useState(false);
 
   // Submissions filter
@@ -239,8 +241,8 @@ export function AdminDashboardClient({
     });
   }, []);
 
-  const loadOverview = useCallback(async (examId: number) => {
-    setLoading(true);
+  const loadOverview = useCallback(async (examId: number, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(`/api/admin/exams/${examId}/overview`, { cache: 'no-store' });
       if (res.status === 401) {
@@ -250,10 +252,10 @@ export function AdminDashboardClient({
       if (res.ok) {
         const data = (await res.json()) as OverviewPayload;
         setOverview(data);
-        setSettingsForm(data.exam);
+        if (!silent) setSettingsForm(data.exam);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -268,6 +270,26 @@ export function AdminDashboardClient({
       void loadOverview(selectedExamId);
     }
   }, [authed, selectedExamId, loadOverview]);
+
+  // Auto-refresh overview & submissions every 5s when liveRefresh is on
+  useEffect(() => {
+    if (
+      !authed ||
+      !liveRefresh ||
+      selectedExamId === null ||
+      auditSessionId !== null ||
+      createOpen ||
+      (tab !== 'overview' && tab !== 'submissions')
+    ) {
+      return;
+    }
+    const timer = setInterval(() => {
+      if (!document.hidden) {
+        void loadOverview(selectedExamId, true);
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [authed, liveRefresh, selectedExamId, auditSessionId, createOpen, tab, loadOverview]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -629,9 +651,27 @@ export function AdminDashboardClient({
 
             <button
               type="button"
+              onClick={() => setLiveRefresh((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-[3px] border px-2.5 py-1.5 text-xs transition-colors ${
+                liveRefresh
+                  ? 'border-[#1b6647]/40 bg-[#e8f3ed] text-[#1b6647]'
+                  : 'border-[#dcd5c7] text-[#57534a] hover:border-[#1a1917]'
+              }`}
+              title="每 5 秒自动同步考情与进度"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  liveRefresh ? 'bg-[#1b6647]' : 'bg-[#8c867a]'
+                }`}
+              />
+              {liveRefresh ? '实时刷新' : '已暂停'}
+            </button>
+
+            <button
+              type="button"
               onClick={() => selectedExamId && void loadOverview(selectedExamId)}
               className="rounded-[3px] border border-[#dcd5c7] p-1.5 text-[#57534a] hover:border-[#1a1917] hover:text-[#1a1917]"
-              title="刷新"
+              title="立即刷新"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -961,7 +1001,9 @@ export function AdminDashboardClient({
                               </td>
                               <td className="font-mono-num px-3 py-3">
                                 {s.status === 'in_progress' ? (
-                                  <span className="text-[#8c867a]">--</span>
+                                  <span className="text-xs text-[#1b4965]">
+                                    已答 {s.answered_count}/{s.total_questions}
+                                  </span>
                                 ) : (
                                   <>
                                     <span

@@ -77,7 +77,7 @@ export function ExamHallClient({
   const lockedRef = useRef(false);
   const awayRef = useRef(false);
   const lastLeaveMsRef = useRef(0);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef(0);
 
   useEffect(() => {
     answersRef.current = answers;
@@ -110,9 +110,10 @@ export function ExamHallClient({
   );
   const unansweredCount = questions.length - answeredCount;
 
-  // Persist draft to server
+  // Persist draft immediately (0ms debounce, keepalive)
   const flushSave = useCallback(async () => {
     if (lockedRef.current) return;
+    const seq = ++saveSeqRef.current;
     setSaveState('saving');
     try {
       const res = await fetch(`/api/sessions/${initialSession.id}`, {
@@ -122,6 +123,7 @@ export function ExamHallClient({
           answers: answersRef.current,
           flagged_ids: flaggedRef.current,
         }),
+        keepalive: true,
       });
       const data = (await res.json()) as { locked?: boolean };
       if (data.locked) {
@@ -129,19 +131,15 @@ export function ExamHallClient({
         onFinalized();
         return;
       }
-      setSaveState(res.ok ? 'saved' : 'error');
+      if (seq === saveSeqRef.current) {
+        setSaveState(res.ok ? 'saved' : 'error');
+      }
     } catch {
-      setSaveState('error');
+      if (seq === saveSeqRef.current) {
+        setSaveState('error');
+      }
     }
   }, [initialSession.id, onFinalized]);
-
-  const scheduleSave = useCallback(() => {
-    setSaveState('saving');
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      void flushSave();
-    }, 350);
-  }, [flushSave]);
 
   // Submit handler (manual or timeout)
   const handleSubmit = useCallback(
@@ -150,7 +148,6 @@ export function ExamHallClient({
       lockedRef.current = true;
       setSubmitting(true);
       setConfirmSubmitOpen(false);
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
       try {
         await fetch(`/api/sessions/${initialSession.id}/submit`, {
@@ -161,6 +158,7 @@ export function ExamHallClient({
             flagged_ids: flaggedRef.current,
             reason,
           }),
+          keepalive: true,
         });
       } finally {
         onFinalized();
@@ -195,14 +193,16 @@ export function ExamHallClient({
       awayRef.current = true;
       lastLeaveMsRef.current = now;
 
-      // Flush latest draft immediately before recording leave
-      void flushSave();
-
       try {
         const res = await fetch(`/api/sessions/${initialSession.id}/violation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'leave', reason }),
+          body: JSON.stringify({
+            action: 'leave',
+            reason,
+            answers: answersRef.current,
+            flagged_ids: flaggedRef.current,
+          }),
           keepalive: true,
         });
         const data = (await res.json()) as {
@@ -219,9 +219,7 @@ export function ExamHallClient({
           lockedRef.current = true;
           setWarningModal({ open: false, count: 0, reasonText: '' });
           setCheatedLockOverlay(true);
-          setTimeout(() => {
-            onFinalized();
-          }, 2200);
+          onFinalized();
           return;
         }
 
@@ -301,9 +299,16 @@ export function ExamHallClient({
       }
     };
 
+    const onPageHide = () => {
+      if (!lockedRef.current) {
+        void flushSave();
+      }
+    };
+
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
     window.addEventListener('focus', onFocus);
+    window.addEventListener('pagehide', onPageHide);
     document.addEventListener('contextmenu', preventAction);
     document.addEventListener('copy', preventAction);
     document.addEventListener('cut', preventAction);
@@ -313,12 +318,13 @@ export function ExamHallClient({
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pagehide', onPageHide);
       document.removeEventListener('contextmenu', preventAction);
       document.removeEventListener('copy', preventAction);
       document.removeEventListener('cut', preventAction);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [reportLeave, reportReturn, warningModal.open, confirmSubmitOpen, questions.length]);
+  }, [flushSave, reportLeave, reportReturn, warningModal.open, confirmSubmitOpen, questions.length]);
 
   const currentQuestion = questions[currentIndex];
   const currentSelected = currentQuestion ? answers[String(currentQuestion.id)] ?? [] : [];
@@ -326,33 +332,31 @@ export function ExamHallClient({
 
   const toggleOption = (q: PublicQuestion, optKey: string) => {
     if (lockedRef.current) return;
-    setAnswers((prev) => {
-      const qid = String(q.id);
-      const existing = prev[qid] ?? [];
-      let next: string[];
-      if (q.type === 'multiple') {
-        next = existing.includes(optKey)
-          ? existing.filter((k) => k !== optKey)
-          : [...existing, optKey].sort();
-      } else {
-        next = [optKey];
-      }
-      const updated = { ...prev, [qid]: next };
-      if (next.length === 0) delete updated[qid];
-      answersRef.current = updated;
-      return updated;
-    });
-    scheduleSave();
+    const prev = answersRef.current;
+    const qid = String(q.id);
+    const existing = prev[qid] ?? [];
+    let next: string[];
+    if (q.type === 'multiple') {
+      next = existing.includes(optKey)
+        ? existing.filter((k) => k !== optKey)
+        : [...existing, optKey].sort();
+    } else {
+      next = [optKey];
+    }
+    const updated = { ...prev, [qid]: next };
+    if (next.length === 0) delete updated[qid];
+    answersRef.current = updated;
+    setAnswers(updated);
+    void flushSave();
   };
 
   const toggleFlag = (qId: number) => {
     if (lockedRef.current) return;
-    setFlaggedIds((prev) => {
-      const next = prev.includes(qId) ? prev.filter((id) => id !== qId) : [...prev, qId];
-      flaggedRef.current = next;
-      return next;
-    });
-    scheduleSave();
+    const prev = flaggedRef.current;
+    const next = prev.includes(qId) ? prev.filter((id) => id !== qId) : [...prev, qId];
+    flaggedRef.current = next;
+    setFlaggedIds(next);
+    void flushSave();
   };
 
   // Group questions by type for the Answer Sheet Matrix

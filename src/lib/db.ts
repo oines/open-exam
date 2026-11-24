@@ -864,19 +864,37 @@ export function recordSessionViolation(
   event: {
     action: 'leave' | 'return';
     reason?: 'visibility_hidden' | 'window_blur' | 'fullscreen_exit';
+    answers?: Record<string, string[]>;
+    flagged_ids?: number[];
   },
 ): { session: ExamSessionRecord | null; locked: boolean; deduplicated: boolean } {
   const db = openDatabase();
   const current = getSessionById(sessionId);
   if (!current) return { session: null, locked: false, deduplicated: false };
 
-  const fresh = ensureSessionFreshness(current);
+  let fresh = ensureSessionFreshness(current);
   if (fresh.status !== 'in_progress') {
     return {
       session: fresh,
       locked: fresh.status === 'cheated_submitted',
       deduplicated: false,
     };
+  }
+
+  // Atomically persist latest client answers/flags before any violation lock
+  if (event.answers || event.flagged_ids) {
+    const saved = saveSessionProgress(sessionId, {
+      answers: event.answers,
+      flagged_ids: event.flagged_ids,
+    });
+    if (saved) fresh = saved;
+    if (fresh.status !== 'in_progress') {
+      return {
+        session: fresh,
+        locked: fresh.status === 'cheated_submitted',
+        deduplicated: false,
+      };
+    }
   }
 
   const exam = getExamById(fresh.exam_id);
