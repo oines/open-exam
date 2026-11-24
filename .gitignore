@@ -1,0 +1,12 @@
+/node_modules/
+/.next/
+/data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+.env.*.local
+*.tar.gz
+.DS_Store
+*.log

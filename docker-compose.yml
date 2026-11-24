@@ -1,0 +1,13 @@
+services:
+  exam:
+    build: .
+    container_name: open-exam
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin123456}"
+      ADMIN_SESSION_SECRET: "${ADMIN_SESSION_SECRET:-change-this-to-a-long-random-secret}"
+      DATABASE_PATH: "/app/data/exam.db"
+    volumes:
+      - ./data:/app/data
